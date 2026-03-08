@@ -110,11 +110,18 @@ def quit_app(app, force=False):
         log.warning(f"quit_app('{app}') failed: {result.stderr.strip()}")
 
 
-def open_app(app):
-    log.info(f"  Activating '{app}'...")
-    run_as(f'tell application "{app}" to activate')
+def open_app(app, background=False):
+    """Launch an app. If background=True, open without bringing to front."""
+    if background:
+        log.info(f"  Launching '{app}' in background...")
+        subprocess.run(["open", "-g", "-a", app], capture_output=True, text=True)
+    else:
+        log.info(f"  Launching '{app}'...")
+        subprocess.run(["open", "-a", app], capture_output=True, text=True)
+        time.sleep(1.0)
+        run_as(f'tell application "{app}" to activate')
     time.sleep(2.0)
-    log.debug(f"  '{app}' activate done")
+    log.debug(f"  '{app}' open done")
 
 
 def find_obsidian_vault_state():
@@ -440,12 +447,8 @@ def run_preset(name):
         screen_keyword = config.get("screen")
 
         if not screen_keyword:
-            # No screen specified — just open the app
-            log.info(f"  Opening {app}...")
-            open_app(app)
-            if config.get("minimize"):
-                log.info(f"  Minimizing {app}...")
-                run_as(f'tell application "System Events" to tell process "{app}" to set miniaturized of every window to true')
+            # No screen specified — just ensure the app is running
+            open_app(app, background=config.get("minimize", False))
             continue
 
         matched_name, bounds = match_screen(screens, screen_keyword)
