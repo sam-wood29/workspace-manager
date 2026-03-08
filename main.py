@@ -457,7 +457,19 @@ def run_preset(name):
 
         if not screen_keyword:
             # No screen specified — just ensure the app is running
-            open_app(app, background=config.get("minimize", False))
+            open_app(app)
+            if config.get("minimize"):
+                time.sleep(1.0)
+                run_as(f"""
+tell application "System Events"
+    tell process "{app}"
+        try
+            set value of attribute "AXMinimized" of window 1 to true
+        end try
+    end tell
+end tell
+""")
+                log.info(f"  Minimized '{app}' to dock")
             continue
 
         matched_name, bounds = match_screen(screens, screen_keyword)
