@@ -23,13 +23,24 @@ def load_presets():
 
 
 def visible_presets(all_presets):
-    """Exclude presets that are only used as automatic laptop fallbacks."""
+    """Exclude presets that are only used as automatic laptop fallbacks, and the actions block."""
     fallbacks = {
         p.get("laptop_fallback")
         for p in all_presets.values()
-        if p.get("laptop_fallback")
+        if isinstance(p, dict) and p.get("laptop_fallback")
     }
-    return {name: data for name, data in all_presets.items() if name not in fallbacks}
+    return {
+        name: data
+        for name, data in all_presets.items()
+        if name not in fallbacks and name != "actions"
+    }
+
+
+def _section_header(title):
+    """Return a disabled MenuItem styled as a section label."""
+    item = rumps.MenuItem(title)
+    item.set_callback(None)
+    return item
 
 
 class WorkspaceManagerApp(rumps.App):
@@ -38,28 +49,42 @@ class WorkspaceManagerApp(rumps.App):
         self._build_menu()
 
     def _build_menu(self):
-        presets = visible_presets(load_presets())
-        # Separate destructive presets (nuke/clear) from workspace presets
-        workspace_presets = {n: d for n, d in presets.items() if not d.get("nuke") and not d.get("close_others", False) or d.get("open")}
+        all_data = load_presets()
+        presets = visible_presets(all_data)
+        actions = all_data.get("actions", {})
+
+        # Separate workspace presets from destructive ones (nuke/clear)
+        workspace_presets = {
+            n: d for n, d in presets.items()
+            if not d.get("nuke") and not d.get("close_others", False) or d.get("open")
+        }
         destructive_presets = {n: d for n, d in presets.items() if n not in workspace_presets}
 
-        # Add workspace presets first (the ones you actually want to click)
+        # --- WORKSPACES section ---
+        self.menu.add(_section_header("WORKSPACES"))
+        self.menu.add(rumps.separator)
         for name, _ in workspace_presets.items():
             display = name.replace("_", " ").title()
-            self.menu.add(rumps.MenuItem(display, callback=self._make_handler(name, display)))
+            self.menu.add(rumps.MenuItem(display, callback=self._make_preset_handler(name, display)))
 
-        # Separator before destructive presets
         if destructive_presets:
             self.menu.add(rumps.separator)
             for name, _ in destructive_presets.items():
                 display = name.replace("_", " ").title()
-                self.menu.add(rumps.MenuItem(display, callback=self._make_handler(name, display)))
+                self.menu.add(rumps.MenuItem(display, callback=self._make_preset_handler(name, display)))
 
-    def _make_handler(self, preset_name, display_name):
+        # --- ACTIONS section ---
+        if actions:
+            self.menu.add(rumps.separator)
+            self.menu.add(_section_header("ACTIONS"))
+            self.menu.add(rumps.separator)
+            for name, cfg in actions.items():
+                label = cfg.get("label") or name.replace("_", " ").title()
+                self.menu.add(rumps.MenuItem(label, callback=self._make_action_handler(name, label)))
+
+    def _make_preset_handler(self, preset_name, display_name):
         def handler(_):
             def run():
-                # main.py now handles its own logging to LOG_FILE,
-                # so we just need to run it and check the exit code.
                 try:
                     result = subprocess.run(
                         [str(UV_BIN), "run", "main.py", preset_name],
@@ -75,6 +100,27 @@ class WorkspaceManagerApp(rumps.App):
                         rumps.notification("Workspace Manager", "Error", msg)
                 except subprocess.TimeoutExpired:
                     rumps.notification("Workspace Manager", "Error", f"{display_name} timed out after 2 minutes")
+
+            threading.Thread(target=run, daemon=True).start()
+
+        return handler
+
+    def _make_action_handler(self, action_name, display_name):
+        def handler(_):
+            def run():
+                try:
+                    result = subprocess.run(
+                        [str(UV_BIN), "run", "main.py", "--action", action_name],
+                        cwd=SCRIPT_DIR,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if result.returncode != 0:
+                        msg = result.stderr.strip().split("\n")[-1] if result.stderr.strip() else "Something went wrong"
+                        rumps.notification("Workspace Manager", "Error", msg)
+                except subprocess.TimeoutExpired:
+                    rumps.notification("Workspace Manager", "Error", f"{display_name} timed out")
 
             threading.Thread(target=run, daemon=True).start()
 

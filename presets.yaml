@@ -1,3 +1,10 @@
+actions:
+  cost_dashboard:
+    label: "Cost Dashboard"
+    type: chrome_tab
+    url: "https://platform.claude.com/cost"
+    chrome_profile: "Profile 1"
+
 nuke:
   nuke: true
 

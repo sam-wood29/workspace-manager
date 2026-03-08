@@ -395,6 +395,33 @@ def nuke_all():
         log.info("All non-protected apps closed successfully.")
 
 
+def open_chrome_tab(url: str, profile: str | None = None):
+    """Open a URL in Chrome, optionally in a specific profile."""
+    args = ["open", "-a", "Google Chrome"]
+    if profile:
+        args += ["--args", f"--profile-directory={profile}"]
+    args.append(url)
+    subprocess.run(args)
+
+
+def run_action(name):
+    presets = load_presets()
+    actions = presets.get("actions", {})
+    action = actions.get(name)
+
+    if not action:
+        log.error(f"Unknown action '{name}'. Available: {list(actions.keys())}")
+        sys.exit(1)
+
+    if action.get("type") == "chrome_tab":
+        log.info(f"Opening Chrome tab: {action['url']}")
+        open_chrome_tab(action["url"], action.get("chrome_profile"))
+        log.info("Done.")
+    else:
+        log.error(f"Unknown action type: {action.get('type')}")
+        sys.exit(1)
+
+
 def run_preset(name):
     presets = load_presets()
     preset = presets.get(name)
@@ -471,10 +498,19 @@ def run_preset(name):
 
 
 if __name__ == "__main__":
-    preset_name = sys.argv[1] if len(sys.argv) > 1 else "deep_work"
-    try:
-        log.info(f"=== Starting preset '{preset_name}' ===")
-        run_preset(preset_name)
-    except Exception:
-        log.exception("Unhandled exception in workspace manager")
-        sys.exit(1)
+    if len(sys.argv) >= 3 and sys.argv[1] == "--action":
+        action_name = sys.argv[2]
+        try:
+            log.info(f"=== Running action '{action_name}' ===")
+            run_action(action_name)
+        except Exception:
+            log.exception("Unhandled exception in workspace manager")
+            sys.exit(1)
+    else:
+        preset_name = sys.argv[1] if len(sys.argv) > 1 else "deep_work"
+        try:
+            log.info(f"=== Starting preset '{preset_name}' ===")
+            run_preset(preset_name)
+        except Exception:
+            log.exception("Unhandled exception in workspace manager")
+            sys.exit(1)
