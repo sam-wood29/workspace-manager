@@ -231,6 +231,22 @@ def run_preset(name):
     screens = get_screens()
     print(f"Detected screens: {list(screens.keys())}")
 
+    # Auto-switch to laptop_fallback if any required screen isn't connected
+    fallback = preset.get("laptop_fallback")
+    if fallback:
+        missing = any(
+            not match_screen(screens, cfg["screen"])[0]
+            for cfg in preset.get("open", {}).values()
+            if "screen" in cfg
+        )
+        if missing:
+            print(f"External screens not found — switching to '{fallback}' preset")
+            name = fallback
+            preset = presets.get(name)
+            if not preset:
+                print(f"Fallback preset '{fallback}' not found in presets.yaml")
+                sys.exit(1)
+
     # Close everything we don't need
     if preset.get("close_others"):
         keep = list(preset.get("open", {}).keys()) + preset.get("background", []) + ["Finder"]

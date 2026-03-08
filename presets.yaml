@@ -1,5 +1,6 @@
 deep_work:
   close_others: true
+  laptop_fallback: laptop
   background:
     - Wispr Flow
   open:
@@ -10,3 +11,16 @@ deep_work:
     Obsidian:
       screen: HP
       obsidian_workspace: workspaces/obsidian_deep_work.json
+
+laptop:
+  close_others: true
+  background:
+    - Wispr Flow
+  open:
+    Terminal:
+      screen: built-in
+    Obsidian:
+      screen: built-in
+      obsidian_workspace: workspaces/obsidian_deep_work.json
+    Cursor:
+      screen: built-in
