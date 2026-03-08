@@ -1,0 +1,12 @@
+deep_work:
+  close_others: true
+  background:
+    - Wispr Flow
+  open:
+    Cursor:
+      screen: Dell
+    Terminal:
+      screen: Dell
+    Obsidian:
+      screen: HP
+      obsidian_workspace: workspaces/obsidian_deep_work.json
