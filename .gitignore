@@ -11,3 +11,6 @@ wheels/
 
 # Compiled launcher app (built locally via osacompile)
 Workspace Manager.app/
+
+# Logs
+*.log

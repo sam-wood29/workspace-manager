@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-LOG_FILE = Path("/tmp/workspace-manager.log")
+LOG_FILE = Path(__file__).parent / "workspace-manager.log"
 
 # Set up logging to both file and stdout
 log = logging.getLogger("workspace-manager")
@@ -112,12 +112,17 @@ def quit_app(app, force=False):
 
 def open_app(app, background=False):
     """Launch an app. If background=True, open without bringing to front."""
+    # Use explicit path when possible to avoid Launch Services resolving
+    # to nested helper apps with the same name (e.g. Wispr Flow).
+    app_path = f"/Applications/{app}.app"
+    target = [app_path] if os.path.isdir(app_path) else ["-a", app]
+
     if background:
         log.info(f"  Launching '{app}' in background...")
-        subprocess.run(["open", "-g", "-a", app], capture_output=True, text=True)
+        subprocess.run(["open", "-g"] + target, capture_output=True, text=True)
     else:
         log.info(f"  Launching '{app}'...")
-        subprocess.run(["open", "-a", app], capture_output=True, text=True)
+        subprocess.run(["open"] + target, capture_output=True, text=True)
         time.sleep(1.0)
         run_as(f'tell application "{app}" to activate')
     time.sleep(2.0)
@@ -430,8 +435,12 @@ def run_preset(name):
                 log.error(f"Fallback preset '{fallback}' not found in presets.yaml")
                 sys.exit(1)
 
+    # Nuke everything first if requested (aggressive clean slate)
+    if preset.get("nuke_first"):
+        log.info("Nuking all apps before loading preset...")
+        nuke_all()
     # Close everything we don't need
-    if preset.get("close_others"):
+    elif preset.get("close_others"):
         keep = list(preset.get("open", {}).keys()) + preset.get("background", []) + ["Finder"]
         log.info("Closing other apps...")
         close_all_except(keep)

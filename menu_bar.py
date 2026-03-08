@@ -14,7 +14,7 @@ import yaml
 
 SCRIPT_DIR = Path(__file__).parent
 UV_BIN = Path.home() / ".local" / "bin" / "uv"
-LOG_FILE = Path("/tmp/workspace-manager.log")
+LOG_FILE = SCRIPT_DIR / "workspace-manager.log"
 
 
 def load_presets():
@@ -39,9 +39,21 @@ class WorkspaceManagerApp(rumps.App):
 
     def _build_menu(self):
         presets = visible_presets(load_presets())
-        for name, _ in presets.items():
+        # Separate destructive presets (nuke/clear) from workspace presets
+        workspace_presets = {n: d for n, d in presets.items() if not d.get("nuke") and not d.get("close_others", False) or d.get("open")}
+        destructive_presets = {n: d for n, d in presets.items() if n not in workspace_presets}
+
+        # Add workspace presets first (the ones you actually want to click)
+        for name, _ in workspace_presets.items():
             display = name.replace("_", " ").title()
             self.menu.add(rumps.MenuItem(display, callback=self._make_handler(name, display)))
+
+        # Separator before destructive presets
+        if destructive_presets:
+            self.menu.add(rumps.separator)
+            for name, _ in destructive_presets.items():
+                display = name.replace("_", " ").title()
+                self.menu.add(rumps.MenuItem(display, callback=self._make_handler(name, display)))
 
     def _make_handler(self, preset_name, display_name):
         def handler(_):

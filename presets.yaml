@@ -5,7 +5,7 @@ clear:
   close_others: true
 
 deep_work:
-  close_others: true
+  nuke_first: true
   laptop_fallback: laptop
   open:
     Wispr Flow:
