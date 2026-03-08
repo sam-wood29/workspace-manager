@@ -7,9 +7,9 @@ clear:
 deep_work:
   nuke_first: true
   laptop_fallback: laptop
+  background:
+    - Wispr Flow
   open:
-    Wispr Flow:
-      minimize: true
     Cursor:
       screen: Dell
     Terminal:
@@ -20,9 +20,9 @@ deep_work:
 
 laptop:
   close_others: true
+  background:
+    - Wispr Flow
   open:
-    Wispr Flow:
-      minimize: true
     Terminal:
       screen: built-in
     Obsidian:

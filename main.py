@@ -110,21 +110,15 @@ def quit_app(app, force=False):
         log.warning(f"quit_app('{app}') failed: {result.stderr.strip()}")
 
 
-def open_app(app, background=False):
-    """Launch an app. If background=True, open without bringing to front."""
-    # Use explicit path when possible to avoid Launch Services resolving
-    # to nested helper apps with the same name (e.g. Wispr Flow).
+def open_app(app):
+    """Launch an app."""
     app_path = f"/Applications/{app}.app"
     target = [app_path] if os.path.isdir(app_path) else ["-a", app]
 
-    if background:
-        log.info(f"  Launching '{app}' in background...")
-        subprocess.run(["open", "-g"] + target, capture_output=True, text=True)
-    else:
-        log.info(f"  Launching '{app}'...")
-        subprocess.run(["open"] + target, capture_output=True, text=True)
-        time.sleep(1.0)
-        run_as(f'tell application "{app}" to activate')
+    log.info(f"  Launching '{app}'...")
+    subprocess.run(["open"] + target, capture_output=True, text=True)
+    time.sleep(1.0)
+    run_as(f'tell application "{app}" to activate')
     time.sleep(2.0)
     log.debug(f"  '{app}' open done")
 
@@ -456,20 +450,7 @@ def run_preset(name):
         screen_keyword = config.get("screen")
 
         if not screen_keyword:
-            # No screen specified — just ensure the app is running
             open_app(app)
-            if config.get("minimize"):
-                time.sleep(1.0)
-                run_as(f"""
-tell application "System Events"
-    tell process "{app}"
-        try
-            set value of attribute "AXMinimized" of window 1 to true
-        end try
-    end tell
-end tell
-""")
-                log.info(f"  Minimized '{app}' to dock")
             continue
 
         matched_name, bounds = match_screen(screens, screen_keyword)
