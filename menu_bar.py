@@ -13,6 +13,8 @@ import rumps
 import yaml
 
 SCRIPT_DIR = Path(__file__).parent
+UV_BIN = Path.home() / ".local" / "bin" / "uv"
+LOG_FILE = Path("/tmp/workspace-manager.log")
 
 
 def load_presets():
@@ -44,17 +46,23 @@ class WorkspaceManagerApp(rumps.App):
     def _make_handler(self, preset_name, display_name):
         def handler(_):
             def run():
-                result = subprocess.run(
-                    ["uv", "run", "main.py", preset_name],
-                    cwd=SCRIPT_DIR,
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode == 0:
-                    rumps.notification("Workspace Manager", "", f"{display_name} loaded")
-                else:
-                    msg = result.stderr.strip() or "Something went wrong"
-                    rumps.notification("Workspace Manager", "Error", msg)
+                # main.py now handles its own logging to LOG_FILE,
+                # so we just need to run it and check the exit code.
+                try:
+                    result = subprocess.run(
+                        [str(UV_BIN), "run", "main.py", preset_name],
+                        cwd=SCRIPT_DIR,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                    )
+                    if result.returncode == 0:
+                        rumps.notification("Workspace Manager", "", f"{display_name} loaded")
+                    else:
+                        msg = result.stderr.strip().split("\n")[-1] if result.stderr.strip() else "Something went wrong"
+                        rumps.notification("Workspace Manager", "Error", msg)
+                except subprocess.TimeoutExpired:
+                    rumps.notification("Workspace Manager", "Error", f"{display_name} timed out after 2 minutes")
 
             threading.Thread(target=run, daemon=True).start()
 

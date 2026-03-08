@@ -7,6 +7,8 @@ Usage: uv run main.py [preset_name]
 """
 
 import json
+import logging
+import os
 import subprocess
 import sys
 import time
@@ -14,16 +16,34 @@ from pathlib import Path
 
 import yaml
 
+LOG_FILE = Path("/tmp/workspace-manager.log")
+
+# Set up logging to both file and stdout
+log = logging.getLogger("workspace-manager")
+log.setLevel(logging.DEBUG)
+_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+
+_fh = logging.FileHandler(LOG_FILE)
+_fh.setLevel(logging.DEBUG)
+_fh.setFormatter(_formatter)
+log.addHandler(_fh)
+
+_sh = logging.StreamHandler(sys.stdout)
+_sh.setLevel(logging.INFO)
+_sh.setFormatter(logging.Formatter("%(message)s"))
+log.addHandler(_sh)
+
 try:
     from AppKit import NSScreen
 except ImportError:
-    print("Missing dependency. Run: uv add pyobjc-framework-Cocoa")
+    log.error("Missing dependency. Run: uv add pyobjc-framework-Cocoa")
     sys.exit(1)
 
 # Apps that should never be closed (managed/resized instead)
 PROTECTED = {"Finder", "SystemUIServer", "Dock", "NotificationCenter",
              "Control Center", "WindowServer", "Spotlight", "Alfred",
-             "Cursor", "Terminal", "iTerm2", "iTerm"}
+             "Cursor", "Terminal", "iTerm2", "iTerm",
+             "macOS InstantView"}
 
 OBSIDIAN_APP_SUPPORT = Path.home() / "Library" / "Application Support" / "obsidian"
 
@@ -66,7 +86,11 @@ def match_screen(screens, keyword):
 
 
 def run_as(script):
-    return subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    log.debug(f"osascript: {script.strip()[:120]}")
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
+    if result.returncode != 0 and result.stderr.strip():
+        log.debug(f"osascript failed (rc={result.returncode}): {result.stderr.strip()}")
+    return result
 
 
 def is_running(app):
@@ -74,13 +98,23 @@ def is_running(app):
     return result.stdout.strip() == "true"
 
 
-def quit_app(app):
-    run_as(f'tell application "{app}" to quit')
+def quit_app(app, force=False):
+    if force:
+        log.info(f"  Force-quitting '{app}'")
+        # Use killall which matches by process name — more reliable than AppleScript
+        subprocess.run(["killall", "-9", app], capture_output=True, text=True)
+        return
+    log.info(f"  Quitting '{app}'")
+    result = run_as(f'tell application "{app}" to quit')
+    if result.returncode != 0 and result.stderr.strip():
+        log.warning(f"quit_app('{app}') failed: {result.stderr.strip()}")
 
 
 def open_app(app):
+    log.info(f"  Activating '{app}'...")
     run_as(f'tell application "{app}" to activate')
     time.sleep(2.0)
+    log.debug(f"  '{app}' activate done")
 
 
 def find_obsidian_vault_state():
@@ -113,7 +147,7 @@ def set_obsidian_bounds_via_file(bounds, workspace_file=None):
     """
     state_file = find_obsidian_vault_state()
     if not state_file:
-        print("    Warning: could not find Obsidian vault state file — skipping bounds")
+        log.warning("Could not find Obsidian vault state file — skipping bounds")
         return
 
     x1, y1, x2, y2 = bounds
@@ -126,7 +160,7 @@ def set_obsidian_bounds_via_file(bounds, workspace_file=None):
         "devTools": False,
     }
 
-    print("    (Obsidian needs restart to reposition — quitting and relaunching...)")
+    log.info("Obsidian needs restart to reposition — quitting and relaunching...")
     quit_app("Obsidian")
     time.sleep(1.5)
 
@@ -149,7 +183,7 @@ def set_obsidian_bounds_via_file(bounds, workspace_file=None):
             import shutil
             shutil.copy2(workspace_src, vault_path / ".obsidian" / "workspace.json")
         else:
-            print(f"    Warning: could not write workspace file")
+            log.warning("Could not write workspace file")
 
     open_app("Obsidian")
 
@@ -183,7 +217,7 @@ end tell
             workspace_file = config.get("obsidian_workspace") if config else None
             set_obsidian_bounds_via_file(bounds, workspace_file)
         else:
-            print(f"    Warning: no window appeared for {app} after 2s — skipping bounds")
+            log.warning(f"No window appeared for {app} after 2s — skipping bounds")
         return
 
     script = f"""
@@ -197,27 +231,162 @@ end tell
 """
     result = run_as(script)
     if result.returncode != 0 and result.stderr.strip():
-        print(f"    Warning: could not set bounds for {app}: {result.stderr.strip()}")
+        log.warning(f"Could not set bounds for {app}: {result.stderr.strip()}")
 
 
-def get_running_apps():
-    script = (
-        'tell application "System Events" to get name of every application process '
-        "whose background only is false"
-    )
+def get_running_apps(include_background=False):
+    if include_background:
+        script = (
+            'tell application "System Events" to get name of every application process'
+        )
+    else:
+        script = (
+            'tell application "System Events" to get name of every application process '
+            "whose background only is false"
+        )
     result = run_as(script)
+    apps = []
     if result.stdout.strip():
-        return [a.strip() for a in result.stdout.strip().split(",")]
-    return []
+        apps = [a.strip() for a in result.stdout.strip().split(",")]
+    log.debug(f"get_running_apps(include_background={include_background}): {apps}")
+    return apps
+
+
+# Processes that should never be closed under any circumstances.
+# Includes macOS system daemons, this app's own processes, and helpers for protected apps.
+SYSTEM_ONLY = {
+    # macOS core
+    "Finder", "Dock", "SystemUIServer", "NotificationCenter", "WindowServer",
+    "Spotlight", "loginwindow", "WindowManager", "WallpaperAgent",
+    "ControlCenter", "Control Center", "ControlStrip",
+    "System Events", "com.apple.dock.extra",
+    # macOS agents / daemons
+    "AirPlayUIAgent", "CoreLocationAgent", "CoreServicesUIAgent",
+    "TextInputMenuAgent", "WiFiAgent", "UniversalControl",
+    "UIKitSystem", "Siri", "SiriNCService",
+    "universalAccessAuthWarn", "universalaccessd",
+    "Keychain Circle Notification", "chronod", "familycircled", "studentd",
+    "AppSSODaemon", "EmojiFunctionRowIM_Extension", "PAH_Extension",
+    "ThemeWidgetControlViewService", "ThumbnailExtension_macOS",
+    "QuickLookUIService", "ViewBridgeAuxiliary", "CursorUIViewService",
+    # This app + its runtime
+    "Python", "Workspace Manager", "osascript", "node",
+    # macOS InstantView (external display driver)
+    "macOS InstantView",
+}
+
+
+def _is_protected(app, extra_keep=None):
+    """Check if an app should be kept alive (exact match or helper of a protected app)."""
+    all_keep = PROTECTED | SYSTEM_ONLY | (extra_keep or set())
+    if app in all_keep:
+        return True
+    # Protect helper processes for kept/protected apps (e.g. "Cursor Helper (Plugin)")
+    for parent in PROTECTED | (extra_keep or set()):
+        if app.startswith(parent + " "):
+            return True
+    return False
 
 
 def close_all_except(keep):
-    keep_set = set(keep) | PROTECTED
+    keep_set = set(keep)
+    # Close foreground apps that aren't needed
     for app in get_running_apps():
-        if app not in keep_set:
-            print(f"  Closing {app}...")
+        if _is_protected(app, keep_set):
+            log.debug(f"Keeping {app}")
+        else:
+            log.info(f"  Closing {app}...")
+            quit_app(app)
+    # Close background apps — but only ones explicitly NOT in the keep list.
+    # Skip anything that looks like a system daemon or helper for a protected app.
+    for app in get_running_apps(include_background=True):
+        if _is_protected(app, keep_set):
+            log.debug(f"Keeping background app {app}")
+        elif is_running(app):
+            log.info(f"  Closing background app {app}...")
             quit_app(app)
     time.sleep(1)
+
+
+# Nuke mode: only protect macOS system daemons and this app's own processes.
+# Everything else (Cursor, Terminal, Finder, Alfred, etc.) gets closed.
+NUKE_PROTECTED = {
+    # macOS core — killing these causes logout or visual breakage
+    "Finder", "Dock", "SystemUIServer", "NotificationCenter", "WindowServer",
+    "Spotlight", "loginwindow", "WindowManager", "WallpaperAgent",
+    "ControlCenter", "Control Center", "ControlStrip",
+    "System Events", "com.apple.dock.extra",
+    # macOS agents / daemons
+    "AirPlayUIAgent", "CoreLocationAgent", "CoreServicesUIAgent",
+    "TextInputMenuAgent", "WiFiAgent", "UniversalControl",
+    "UIKitSystem", "Siri", "SiriNCService",
+    "universalAccessAuthWarn", "universalaccessd",
+    "Keychain Circle Notification", "chronod", "familycircled", "studentd",
+    "AppSSODaemon", "EmojiFunctionRowIM_Extension", "PAH_Extension",
+    "ThemeWidgetControlViewService", "ThumbnailExtension_macOS",
+    "QuickLookUIService", "ViewBridgeAuxiliary", "CursorUIViewService",
+    # This app's own processes
+    "Python", "Workspace Manager", "osascript",
+    # External display driver
+    "macOS InstantView",
+}
+
+
+def _is_nuke_protected(app):
+    """For nuke mode: only protect system daemons and this app."""
+    if app in NUKE_PROTECTED:
+        return True
+    # Protect helper processes for nuke-protected apps only
+    for parent in NUKE_PROTECTED:
+        if app.startswith(parent + " "):
+            return True
+    return False
+
+
+def nuke_all():
+    # Pass 1: graceful quit for all foreground apps
+    for app in get_running_apps():
+        if _is_nuke_protected(app):
+            log.debug(f"Nuke-skipping: {app}")
+        else:
+            quit_app(app)
+
+    # Pass 2: graceful quit for non-system background apps
+    for app in get_running_apps(include_background=True):
+        if _is_nuke_protected(app):
+            log.debug(f"Nuke-skipping background: {app}")
+        elif is_running(app):
+            quit_app(app)
+
+    # Give apps a moment to close gracefully
+    time.sleep(2)
+
+    # Pass 3: force-quit anything that survived
+    survivors = []
+    for app in get_running_apps():
+        if not _is_nuke_protected(app):
+            survivors.append(app)
+    for app in get_running_apps(include_background=True):
+        if not _is_nuke_protected(app) and app not in survivors and is_running(app):
+            survivors.append(app)
+
+    if survivors:
+        log.info(f"Force-quitting {len(survivors)} stubborn app(s): {survivors}")
+        for app in survivors:
+            quit_app(app, force=True)
+        time.sleep(1)
+
+        # Final check
+        still_alive = [
+            app for app in get_running_apps()
+            if not _is_nuke_protected(app)
+        ]
+        if still_alive:
+            log.warning(f"Still running after force-quit: {still_alive}")
+        else:
+            log.info("All non-protected apps closed successfully.")
+    else:
+        log.info("All non-protected apps closed successfully.")
 
 
 def run_preset(name):
@@ -225,11 +394,18 @@ def run_preset(name):
     preset = presets.get(name)
 
     if not preset:
-        print(f"Unknown preset '{name}'. Available: {list(presets.keys())}")
+        log.error(f"Unknown preset '{name}'. Available: {list(presets.keys())}")
         sys.exit(1)
 
+    if preset.get("nuke"):
+        log.info("Nuking all apps...")
+        log.debug(f"SYSTEM_ONLY = {SYSTEM_ONLY}")
+        nuke_all()
+        log.info("Done.")
+        return
+
     screens = get_screens()
-    print(f"Detected screens: {list(screens.keys())}")
+    log.info(f"Detected screens: {list(screens.keys())}")
 
     # Auto-switch to laptop_fallback if any required screen isn't connected
     fallback = preset.get("laptop_fallback")
@@ -240,45 +416,60 @@ def run_preset(name):
             if "screen" in cfg
         )
         if missing:
-            print(f"External screens not found — switching to '{fallback}' preset")
+            log.info(f"External screens not found — switching to '{fallback}' preset")
             name = fallback
             preset = presets.get(name)
             if not preset:
-                print(f"Fallback preset '{fallback}' not found in presets.yaml")
+                log.error(f"Fallback preset '{fallback}' not found in presets.yaml")
                 sys.exit(1)
 
     # Close everything we don't need
     if preset.get("close_others"):
         keep = list(preset.get("open", {}).keys()) + preset.get("background", []) + ["Finder"]
-        print("\nClosing other apps...")
+        log.info("Closing other apps...")
         close_all_except(keep)
 
     # Start background apps (no window management)
     for app in preset.get("background", []):
         if not is_running(app):
-            print(f"Starting {app} in background...")
+            log.info(f"Starting {app} in background...")
             open_app(app)
 
     # Open and position apps on their screens
     for app, config in preset.get("open", {}).items():
-        screen_keyword = config["screen"]
+        screen_keyword = config.get("screen")
+
+        if not screen_keyword:
+            # No screen specified — just open the app
+            log.info(f"  Opening {app}...")
+            open_app(app)
+            if config.get("minimize"):
+                log.info(f"  Minimizing {app}...")
+                run_as(f'tell application "System Events" to tell process "{app}" to set miniaturized of every window to true')
+            continue
+
         matched_name, bounds = match_screen(screens, screen_keyword)
 
         if not bounds:
-            print(f"  Warning: no screen found matching '{screen_keyword}' — opening without positioning")
+            log.warning(f"No screen found matching '{screen_keyword}' — opening without positioning")
             open_app(app)
             continue
 
-        print(f"  Opening {app} on '{matched_name}'...")
+        log.info(f"  Opening {app} on '{matched_name}'...")
         open_app(app)
         set_window_bounds(app, bounds, config)
 
     # Bring Cursor to front at the end
     run_as('tell application "Cursor" to activate')
 
-    print(f"\nPreset '{name}' loaded.")
+    log.info(f"Preset '{name}' loaded.")
 
 
 if __name__ == "__main__":
     preset_name = sys.argv[1] if len(sys.argv) > 1 else "deep_work"
-    run_preset(preset_name)
+    try:
+        log.info(f"=== Starting preset '{preset_name}' ===")
+        run_preset(preset_name)
+    except Exception:
+        log.exception("Unhandled exception in workspace manager")
+        sys.exit(1)
